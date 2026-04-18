@@ -2,10 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from scipy.stats import entropy
-import time
 
-# 读取零点数据
-filename = "zeros200.txt"
+# 读取零点数据（200万）
+filename = "zeros200.txt"   # 请确认文件名
 zeros = np.loadtxt(filename).ravel()
 zeros.sort()
 print(f"Successfully read {len(zeros)} zeros")
@@ -67,7 +66,7 @@ def spacing_entropy(gammas, nbins=50):
     return entropy(prob)
 
 # ============================================================
-# 1. Different segment ratios for variance (robustness check)
+# 1. 计算不同分段比率下的方差
 # ============================================================
 ratios = [25, 50, 100]
 results_var = {r: {'lnT': [], 'var': []} for r in ratios}
@@ -83,8 +82,9 @@ for T in T_array:
             results_var[r]['lnT'].append(lnT)
             results_var[r]['var'].append(var)
 
-print("\n=== Variance with different segment ratios ===")
-fit_var = {}
+# 存储每个 ratio 的拟合参数
+fit_params = {}
+print("\n=== Variance fits ===")
 for r in ratios:
     lnT_arr = np.array(results_var[r]['lnT'])
     var_arr = np.array(results_var[r]['var'])
@@ -98,13 +98,13 @@ for r in ratios:
         ss_res = np.sum(res**2)
         ss_tot = np.sum((var_arr - np.mean(var_arr))**2)
         r2 = 1 - ss_res/ss_tot
-        fit_var[r] = (x0, k, r2, popt)
+        fit_params[r] = (popt, r2, lnT_arr, var_arr)
         print(f"ratio={r}: inflection={x0:.3f}, k={k:.3f}, R²={r2:.4f}")
-    except:
-        print(f"ratio={r} failed")
+    except Exception as e:
+        print(f"ratio={r} failed: {e}")
 
 # ============================================================
-# 2. Entropy of spacings (using segment_ratio=50)
+# 2. 计算熵（使用 ratio=50）
 # ============================================================
 lnT_ent = []
 ent_vals = []
@@ -121,52 +121,70 @@ for T in T_array:
 
 lnT_ent = np.array(lnT_ent)
 ent_vals = np.array(ent_vals)
-try:
-    p0_ent = [ent_vals[0], ent_vals[-1], 1.0, np.median(lnT_ent)]
-    popt_ent, _ = curve_fit(sigmoid, lnT_ent, ent_vals, p0=p0_ent, maxfev=5000)
-    v0_e, v1_e, k_e, x0_e = popt_ent
-    res_e = ent_vals - sigmoid(lnT_ent, *popt_ent)
-    ss_res_e = np.sum(res_e**2)
-    ss_tot_e = np.sum((ent_vals - np.mean(ent_vals))**2)
-    r2_e = 1 - ss_res_e/ss_tot_e
-    print(f"\n=== Spacing entropy sigmoid fit ===")
-    print(f"inflection={x0_e:.3f}, k={k_e:.3f}, R²={r2_e:.4f}")
-except:
-    print("Entropy fit failed")
+ent_fit_params = None
+if len(lnT_ent) > 10:
+    p0 = [ent_vals[0], ent_vals[-1], 1.0, np.median(lnT_ent)]
+    try:
+        popt_ent, _ = curve_fit(sigmoid, lnT_ent, ent_vals, p0=p0, maxfev=5000)
+        v0_e, v1_e, k_e, x0_e = popt_ent
+        res_e = ent_vals - sigmoid(lnT_ent, *popt_ent)
+        ss_res_e = np.sum(res_e**2)
+        ss_tot_e = np.sum((ent_vals - np.mean(ent_vals))**2)
+        r2_e = 1 - ss_res_e/ss_tot_e
+        ent_fit_params = (popt_ent, r2_e)
+        print(f"\nEntropy fit: inflection={x0_e:.3f}, k={k_e:.3f}, R²={r2_e:.4f}")
+    except Exception as e:
+        print(f"Entropy fit failed: {e}")
 
 # ============================================================
-# 3. Plotting (all labels in English)
+# 图1：方差拟合（三个 ratio 在同一张图上，图例显示参数）
 # ============================================================
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-# Left: variance with different segment ratios
-for r, (x0, k, r2, popt) in fit_var.items():
-    lnT_arr = np.array(results_var[r]['lnT'])
-    var_arr = np.array(results_var[r]['var'])
-    ax1.scatter(lnT_arr, var_arr, alpha=0.5, label=f'ratio={r} data')
-    x_fit = np.linspace(lnT_arr.min(), lnT_arr.max(), 200)
+plt.figure(figsize=(8,6))
+colors = ['blue', 'red', 'green']
+markers = ['o', 's', '^']
+for idx, r in enumerate(ratios):
+    if r not in fit_params:
+        continue
+    popt, r2, lnT_arr, var_arr = fit_params[r]
+    x0, k = popt[3], popt[2]
+    # 绘制散点
+    plt.scatter(lnT_arr, var_arr, color=colors[idx], marker=markers[idx], alpha=0.6, s=30, label=f'ratio={r} data')
+    # 绘制拟合曲线
+    x_fit = np.linspace(min(lnT_arr), max(lnT_arr), 200)
     y_fit = sigmoid(x_fit, *popt)
-    ax1.plot(x_fit, y_fit, '--', label=f'ratio={r} fit (inflection={x0:.2f})')
-ax1.set_xlabel('ln(T)')
-ax1.set_ylabel('Variance of normalized spacings')
-ax1.set_title('Robustness check: varying segment ratio')
-ax1.legend()
-ax1.grid(True)
-
-# Right: entropy of spacings
-if 'popt_ent' in locals():
-    ax2.scatter(lnT_ent, ent_vals, color='green', label='data')
-    x_fit = np.linspace(lnT_ent.min(), lnT_ent.max(), 200)
-    y_fit = sigmoid(x_fit, *popt_ent)
-    ax2.plot(x_fit, y_fit, 'r-', label=f'Sigmoid fit (inflection={x0_e:.2f})')
-    ax2.set_xlabel('ln(T)')
-    ax2.set_ylabel('Shannon entropy of normalized spacings')
-    ax2.set_title('Sigmoidal transition of spacing entropy')
-    ax2.legend()
-    ax2.grid(True)
-
+    plt.plot(x_fit, y_fit, color=colors[idx], linestyle='-', linewidth=1.5,
+             label=f'ratio={r}: ℓ₀={x0:.2f}, k={k:.2f}, R²={r2:.4f}')
+plt.axhline(y=0.178, color='gray', linestyle='--', label='GUE value (0.178)')
+plt.xlabel(r'$\ln T$', fontsize=12)
+plt.ylabel('Variance of normalized spacings', fontsize=12)
+plt.title('Variance transition with different segmentation ratios', fontsize=14)
+plt.legend(fontsize=9, loc='best')
+plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig('supplementary_fits_english.png', dpi=150)
+plt.savefig('variance_2M.pdf', dpi=300)
 plt.show()
 
-print("\nSupplementary experiments completed. Image saved as supplementary_fits_english.png")
+# ============================================================
+# 图2：熵拟合（单独一张图）
+# ============================================================
+if ent_fit_params is not None:
+    popt_ent, r2_e = ent_fit_params
+    x0_e, k_e = popt_ent[3], popt_ent[2]
+    plt.figure(figsize=(8,6))
+    plt.scatter(lnT_ent, ent_vals, color='green', alpha=0.7, s=30, label='Data (2M zeros)')
+    x_fit = np.linspace(min(lnT_ent), max(lnT_ent), 200)
+    y_fit = sigmoid(x_fit, *popt_ent)
+    plt.plot(x_fit, y_fit, 'r-', linewidth=2,
+             label=f'Sigmoid fit: ℓ₀={x0_e:.2f}, k={k_e:.3f}, R²={r2_e:.4f}')
+    plt.xlabel(r'$\ln T$', fontsize=12)
+    plt.ylabel('Shannon entropy of normalized spacings', fontsize=12)
+    plt.title('Entropy transition (2M zeros, r=50)', fontsize=14)
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('entropy_2M.pdf', dpi=300)
+    plt.show()
+else:
+    print("Entropy fit not available; skipping figure 2.")
+
+print("\nFigures saved: variance_2M.pdf and entropy_2M.pdf")
